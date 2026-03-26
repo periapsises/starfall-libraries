@@ -1,0 +1,394 @@
+--@name Async Library
+--@author Periapsis
+--@shared
+
+local coroutine_create, coroutine_status, coroutine_resume, coroutine_yield, coroutine_wait = coroutine.create, coroutine.status, coroutine.resume, coroutine.yield, coroutine.wait
+
+---@class AsyncFunction
+---@field call function The function that will be called when the asynchronous function is invoked.
+local AsyncFunction = {}
+AsyncFunction.__index = AsyncFunction
+
+function AsyncFunction:__call( ... )
+    return self:call( ... )
+end
+
+---@class Thread
+---@field name string The name of the thread.
+---@field runner function? The function that will be called to run the thread.
+---@field values any[]? The values returned by the asynchronous function once it has completed.
+---@field cleanup function? An optional cleanup function that can be called to clean up any resources used by the thread.
+---@field listeners function[]? An optional list of listener functions that will be called with the values returned by the asynchronous function once it has completed.
+
+---@alias Trigger fun(thread: Thread)
+
+local __active_runner
+
+--- Converts a function into an asynchronous function that can be called without blocking the main thread.
+---@param func function The function to convert into an asynchronous function.
+---@param trigger Trigger? An optional trigger function that can be used to control the execution of the asynchronous function.
+---@return AsyncFunction wrapper The asynchronous version of the function.
+---@diagnostic disable-next-line: lowercase-global
+function async( func, trigger )
+    ---@type AsyncFunction
+    local asyncFunction = setmetatable( {}, AsyncFunction )
+
+    function asyncFunction:call( ... )
+        local coroutine = coroutine_create( func )
+        local arguments = { ... }
+
+        ---@type Thread
+        local thread = {
+            name = "Thread_" .. tostring( coroutine ),
+            values = nil,
+            runner = nil,
+            cleanup = nil,
+            listeners = {}
+        }
+
+        local function runner()
+            local previousRunner = __active_runner
+            __active_runner = runner
+            local values = { coroutine_resume( coroutine, unpack( arguments ) ) }
+            __active_runner = previousRunner
+
+            if coroutine_status( coroutine ) ~= "dead" then return end
+
+            if thread.cleanup then thread.cleanup() end
+            thread.values = values
+
+            for _, listener in ipairs( thread.listeners ) do
+                listener( unpack( values ) )
+            end
+
+            thread.listeners = {}
+        end
+
+        thread.runner = runner
+
+        if trigger then
+            trigger( thread )
+        else
+            hook.add( "Tick", thread.name, thread.runner )
+            thread.cleanup = function() hook.remove( "Tick", thread.name ) end
+        end
+
+        return thread
+    end
+
+    return asyncFunction
+end
+
+--- Waits for a thread to complete and returns the values produced by the asynchronous function.
+---@param thread Thread The thread to wait for.
+---@return ... The values produced by the asynchronous function, or nil if the thread has not completed yet.
+---@diagnostic disable-next-line: lowercase-global
+function await( thread )
+    if thread.values then return unpack( thread.values ) end
+
+    if __active_runner then
+        table.insert( thread.listeners, __active_runner )
+    end
+
+    while not thread.values do
+        coroutine_yield()
+    end
+
+    return unpack( thread.values )
+end
+
+--- Waits for a specified amount of time before resuming the current thread.
+---@param time number The amount of time to wait in milliseconds.
+---@diagnostic disable-next-line: lowercase-global
+function wait( time )
+    coroutine_wait( time * 0.001 )
+end
+
+--- Yields the current thread until the next tick.
+---@diagnostic disable-next-line: lowercase-global
+function yield()
+    coroutine_yield()
+end
+
+--- Waits for a condition to be true before resuming the current thread.
+---@param condition fun(): boolean A function that returns a boolean indicating whether the condition has been met.
+---@diagnostic disable-next-line: lowercase-global
+function waitFor( condition )
+    while not condition() do
+        coroutine_yield()
+    end
+end
+
+--------------------------------------------------
+-- Runners
+--------------------------------------------------
+
+---@type table<string, function>
+---@diagnostic disable-next-line: lowercase-global
+runs = {}
+
+--- Creates a trigger that will run the thread's runner function when the specified hook event is fired.
+---@param event string The name of the hook event to listen for.
+---@return Trigger
+function runs.onHook( event )
+    return function( thread )
+        hook.add( event, thread.name, thread.runner )
+        thread.cleanup = function() hook.remove( event, thread.name ) end
+    end
+end
+
+--- Creates a trigger that will run the thread's runner function when the specified timer is fired.
+---@param time number The amount of time between timer ticks in seconds.
+---@return Trigger
+function runs.onTimer( time )
+    return function( thread )
+        timer.create( thread.name, time, 0, thread.runner )
+        thread.cleanup = function() timer.remove( thread.name ) end
+    end
+end
+
+--- Creates a trigger that will run the thread's runner function when the specified network event is received.
+---@param event string The name of the network event to listen for.
+---@return Trigger
+function runs.onNet( event )
+    return function( thread )
+        net.receive( event, thread.runner )
+        thread.cleanup = function() net.receive( event, function() end ) end
+    end
+end
+
+--------------------------------------------------
+-- Utilities
+--------------------------------------------------
+
+--- Defines the structure of an HTTP response returned by the asynchronous HTTP functions.
+---@class HTTPResponse
+---@field content string The content of the HTTP response.
+---@field length number The length of the HTTP response's content.
+---@field headers table The headers of the HTTP response.
+---@field code number The HTTP status code of the response.
+
+local function http_getAsync( url, headers )
+    local waiting = true
+    local response
+
+    local function onSuccess( content, length, headers, code )
+        response = {
+            content = content,
+            length = length,
+            headers = headers,
+            code = code
+        }
+
+        waiting = false
+    end
+
+    local function onFailure( reason )
+        response = {
+            content = reason,
+            length = reason:len(),
+            headers = {},
+            code = 400
+        }
+
+        waiting = false
+    end
+
+    http.get( url, onSuccess, onFailure, headers )
+    while waiting do coroutine_yield() end
+
+    return response
+end
+
+--- Performs an asynchronous HTTP GET request to the specified URL with optional headers.
+---@param url string The URL to send the GET request to.
+---@param headers table? Optional headers to include in the GET request.
+---@return Thread thread A thread that can be awaited to get the HTTP response.
+function http.getAsync( url, headers )
+    return async( http_getAsync )( url, headers )
+end
+
+local function http_postAsync( url, payload, headers )
+    local waiting = true
+    local response
+
+    local function onSuccess( content, length, headers, code )
+        response = {
+            content = content,
+            length = length,
+            headers = headers,
+            code = code
+        }
+
+        waiting = false
+    end
+
+    local function onFailure( reason )
+        response = {
+            content = reason,
+            length = reason:len(),
+            headers = {},
+            code = 400
+        }
+
+        waiting = false
+    end
+
+    ---@diagnostic disable-next-line: param-type-mismatch
+    http.post( url, payload, onSuccess, onFailure, headers )
+    while waiting do coroutine_yield() end
+
+    return response
+end
+
+--- Performs an asynchronous HTTP POST request to the specified URL with optional headers and body.
+---@param url string The URL to send the POST request to.
+---@param payload string|table|nil Optional payload to include in the POST request.
+---@param headers table? Optional headers to include in the POST request.
+---@return Thread thread A thread that can be awaited to get the HTTP response.
+function http.postAsync( url, payload, headers )
+    return async( http_postAsync )( url, payload, headers )
+end
+
+local function hologram_createAsync( position, angles, model, scale )
+    while not hologram.canSpawn() do coroutine_yield() end
+    return hologram.create( position, angles, model, scale )
+end
+
+--- Creates a hologram asynchronously, yielding until the server is able to spawn holograms.
+---@param position Vector The position to spawn the hologram at.
+---@param angles Angle The angles to spawn the hologram with.
+---@param model string The model to use for the hologram.
+---@param scale number The scale to apply to the hologram.
+---@return Thread thread A thread that can be awaited to get the created hologram.
+function hologram.createAsync( position, angles, model, scale )
+    return async( hologram_createAsync )( position, angles, model, scale )
+end
+
+if SERVER then
+    local prop_canSpawn = prop.canSpawn
+
+    local function prop_createAsync( position, angles, model, frozen )
+        while not prop_canSpawn() do coroutine_yield() end
+        return prop.create( position, angles, model, frozen )
+    end
+
+    --- Creates a prop asynchronously, yielding until the server is able to spawn props.
+    ---@param position Vector The position to spawn the prop at.
+    ---@param angles Angle The angles to spawn the prop with.
+    ---@param model string The model to use for the prop.
+    ---@param frozen boolean Whether the prop should be frozen in place.
+    ---@return Thread thread A thread that can be awaited to get the created prop.
+    function prop.createAsync( position, angles, model, frozen )
+        return async( prop_createAsync )( position, angles, model, frozen )
+    end
+
+    local function prop_createRagdollAsync( model, frozen )
+        while not prop_canSpawn() do coroutine_yield() end
+        return prop.createRagdoll( model, frozen )
+    end
+
+    --- Creates a ragdoll prop asynchronously, yielding until the server is able to spawn props.
+    ---@param model string The model to use for the ragdoll prop.
+    ---@param frozen boolean Whether the ragdoll prop should be frozen in place.
+    ---@return Thread thread A thread that can be awaited to get the created ragdoll prop.
+    function prop.createRagdollAsync( model, frozen )
+        return async( prop_createRagdollAsync )( model, frozen )
+    end
+
+    local function prop_createSeatAsync( position, angles, model, frozen )
+        while not prop_canSpawn() do coroutine_yield() end
+        return prop.createSeat( position, angles, model, frozen )
+    end
+
+    --- Creates a seat prop asynchronously, yielding until the server is able to spawn props.
+    ---@param position Vector The position to spawn the seat at.
+    ---@param angles Angle The angles to spawn the seat with.
+    ---@param model string The model to use for the seat.
+    ---@param frozen boolean Whether the seat should be frozen in place.
+    ---@return Thread thread A thread that can be awaited to get the created seat prop.
+    function prop.createSeatAsync( position, angles, model, frozen )
+        return async( prop_createSeatAsync )( position, angles, model, frozen )
+    end
+
+    local function prop_createCustomAsync( position, angles, convexes, frozen )
+        while not prop_canSpawn() do coroutine_yield() end
+        return prop.createCustom( position, angles, convexes, frozen )
+    end
+
+    --- Creates a custom prop asynchronously, yielding until the server is able to spawn props.
+    ---@param position Vector The position to spawn the custom prop at.
+    ---@param angles Angle The angles to spawn the custom prop with.
+    ---@param convexes table The convexes to use for the custom prop.
+    ---@param frozen boolean Whether the custom prop should be frozen in place.
+    ---@return Thread thread A thread that can be awaited to get the created custom prop.
+    function prop.createCustomAsync( position, angles, convexes, frozen )
+        return async( prop_createCustomAsync )( position, angles, convexes, frozen )
+    end
+
+    local function prop_createSentAsync( position, angles, class, frozen, data )
+        while not prop_canSpawn() do coroutine_yield() end
+        return prop.createSent( position, angles, class, frozen, data )
+    end
+
+    --- Creates a sent prop asynchronously, yielding until the server is able to spawn props.
+    ---@param position Vector The position to spawn the sent prop at.
+    ---@param angles Angle The angles to spawn the sent prop with.
+    ---@param class string The class of the sent prop to create.
+    ---@param frozen boolean Whether the sent prop should be frozen in place.
+    ---@param data table? Optional data to include when creating the sent prop.
+    ---@return Thread thread A thread that can be awaited to get the created sent prop.
+    function prop.createSentAsync( position, angles, class, frozen, data )
+        return async( prop_createSentAsync )( position, angles, class, frozen, data )
+    end
+end
+
+if CLIENT then
+    local function bass_loadFileAsync( path, flags )
+        local waiting = true
+        local result
+
+        local function onCompletion( bassObject, errorNumber, errorMessage )
+            result = { bassObject, errorNumber, errorMessage }
+
+            waiting = false
+        end
+
+        bass.loadFile( path, flags, onCompletion )
+        while waiting do coroutine_yield() end
+
+        return result[1], result[2], result[3]
+    end
+
+    --- Loads an audio file asynchronously using BASS, yielding until the file has been loaded.
+    ---@param path string The path to the audio file to load.
+    ---@param flags string Flags to use when loading the audio file.
+    ---@return Thread thread A thread that can be awaited to get the result of the BASS load operation.
+    function bass.loadFileAsync( path, flags )
+        return async( bass_loadFileAsync )( path, flags )
+    end
+
+    local function bass_loadURLAsync( url, flags )
+        local waiting = true
+        local result
+
+        local function onCompletion( bassObject, errorNumber, errorMessage )
+            result = { bassObject, errorNumber, errorMessage }
+
+            waiting = false
+        end
+
+        bass.loadURL( url, flags, onCompletion )
+        while waiting do coroutine_yield() end
+
+        return result[1], result[2], result[3]
+    end
+
+    --- Loads an audio stream from a URL asynchronously using BASS, yielding until the stream has been loaded.
+    ---@param url string The URL of the audio stream to load.
+    ---@param flags string Flags to use when loading the audio stream.
+    ---@return Thread thread A thread that can be awaited to get the result of the BASS load operation.
+    function bass.loadURLAsync( url, flags )
+        return async( bass_loadURLAsync )( url, flags )
+    end
+end
