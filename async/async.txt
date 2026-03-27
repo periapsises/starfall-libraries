@@ -50,6 +50,11 @@ function async( func, trigger )
         }
 
         local function runner()
+            if coroutine_status( coroutine ) == "dead" then
+                if thread.cleanup then thread.cleanup() end
+                return
+            end
+
             local previousRunner = __active_runner
             __active_runner = runner
             local values = { pcall( coroutine_resume, coroutine, unpack( arguments ) ) }
