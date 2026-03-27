@@ -17,6 +17,7 @@ end
 ---@field name string The name of the thread.
 ---@field runner function? The function that will be called to run the thread.
 ---@field values any[]? The values returned by the asynchronous function once it has completed.
+---@field error string? An error message if the asynchronous function encountered an error during execution.
 ---@field cleanup function? An optional cleanup function that can be called to clean up any resources used by the thread.
 ---@field listeners function[]? An optional list of listener functions that will be called with the values returned by the asynchronous function once it has completed.
 
@@ -49,8 +50,14 @@ function async( func, trigger )
         local function runner()
             local previousRunner = __active_runner
             __active_runner = runner
-            local values = { coroutine_resume( coroutine, unpack( arguments ) ) }
+            local values = { pcall( coroutine_resume, coroutine, unpack( arguments ) ) }
+            local success = table.remove( values, 1 )
             __active_runner = previousRunner
+
+            if not success then
+                thread.error = values[1]
+                values = {}
+            end
 
             if coroutine_status( coroutine ) ~= "dead" then return end
 
@@ -94,13 +101,22 @@ function await( thread )
         coroutine_yield()
     end
 
+    if thread.error then error( thread.error ) end
+
     return unpack( thread.values )
+end
+
+--- Waits for a specified amount of time before resuming the current thread.
+---@param time number The amount of time to wait in seconds.
+---@diagnostic disable-next-line: lowercase-global
+function wait( time )
+    coroutine_wait( time )
 end
 
 --- Waits for a specified amount of time before resuming the current thread.
 ---@param time number The amount of time to wait in milliseconds.
 ---@diagnostic disable-next-line: lowercase-global
-function wait( time )
+function waitMS( time )
     coroutine_wait( time * 0.001 )
 end
 
