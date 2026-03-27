@@ -57,7 +57,13 @@ function async( func, trigger )
             __active_runner = previousRunner
 
             if not success then
-                thread.error = values[1] --[[@as string]]
+                ---@diagnostic disable-next-line: undefined-field
+                if type( values[1] ) == "table" and values[1].message then
+                    ---@diagnostic disable-next-line: undefined-field
+                    thread.error = values[1].message
+                else
+                    thread.error = tostring( values[1] )
+                end
                 values = {}
             end
 
