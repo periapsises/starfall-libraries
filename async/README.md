@@ -41,12 +41,20 @@ Pauses the current async process until the target `thread` finishes, then return
 > **Context Matters:** `await` can only be used inside a function that was wrapped with `async`.
 > Using it in a standard hook or callback will throw an error.
 
-`wait( ms )`
-A cleaner way to pause. Suspends execution for `ms` milliseconds without stopping other scripts.
-- `ms` : The time to wait for in milliseconds.
+`wait( time )`
+A cleaner way to pause. Suspends execution for `time` seconds without stopping other scripts.
+- `time` : The time to wait for in seconds.
+
+`waitMS( time )`
+A cleaner way to pause. Suspends execution for `time` milliseconds without stopping other scripts.
+- `time` : The time to wait for in milliseconds.
 
 `yield()`
 A helper for yielding from the current thread. (Equivalent to `coroutine.yield()`)
+
+`quota( fraction )`
+Checks the current CPU usage threshold and yield the current thread if above the specified `fraction` limit.
+- `fraction` : A number from 0 to 1 representing the threshold of the CPU usage.
 
 `waitFor( condition )`
 Suspends the current thread until a condition is met (truthful).
