@@ -3,6 +3,8 @@
 --@shared
 
 local coroutine_create, coroutine_status, coroutine_resume, coroutine_yield, coroutine_wait = coroutine.create, coroutine.status, coroutine.resume, coroutine.yield, coroutine.wait
+local cpuAverage, cpuUsed, cpuMax = cpuAverage, cpuUsed, cpuMax
+local math_max = math.max
 
 ---@class AsyncFunction
 ---@field call function The function that will be called when the asynchronous function is invoked.
@@ -123,6 +125,14 @@ end
 --- Yields the current thread until the next tick.
 ---@diagnostic disable-next-line: lowercase-global
 function yield()
+    coroutine_yield()
+end
+
+--- Yields the current thread if the server's CPU usage is above a certain threshold.
+---@param fraction number The fraction of the server's maximum CPU usage that must be available for the thread to continue.
+---@diagnostic disable-next-line: lowercase-global
+function quota( fraction )
+    if math_max( cpuUsed(), cpuAverage() ) < cpuMax() * fraction then return end
     coroutine_yield()
 end
 
