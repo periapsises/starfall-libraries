@@ -42,7 +42,7 @@ function async( func, trigger )
 
         ---@type Thread
         local thread = {
-            name = "Thread_" .. tostring( coroutine ),
+            name = "thread: " .. table.address( coroutine --[[@as table]] ),
             values = nil,
             runner = nil,
             cleanup = nil,
