@@ -57,7 +57,7 @@ function async( func, trigger )
             __active_runner = previousRunner
 
             if not success then
-                thread.error = values[1]
+                thread.error = values[1] --[[@as string]]
                 values = {}
             end
 
@@ -66,8 +66,12 @@ function async( func, trigger )
             if thread.cleanup then thread.cleanup() end
             thread.values = values
 
+            if not success and #thread.listeners == 0 then
+                error( thread.error, 0 )
+            end
+
             for _, listener in ipairs( thread.listeners ) do
-                listener( unpack( values ) )
+                listener()
             end
 
             thread.listeners = {}
@@ -103,7 +107,7 @@ function await( thread )
         coroutine_yield()
     end
 
-    if thread.error then error( thread.error ) end
+    if thread.error then error( thread.error, 0 ) end
 
     return unpack( thread.values )
 end
