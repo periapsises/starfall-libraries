@@ -6,15 +6,6 @@ local coroutine_create, coroutine_status, coroutine_resume, coroutine_yield, cor
 local cpuAverage, cpuUsed, cpuMax = cpuAverage, cpuUsed, cpuMax
 local math_max = math.max
 
----@class AsyncFunction
----@field call function The function that will be called when the asynchronous function is invoked.
-local AsyncFunction = {}
-AsyncFunction.__index = AsyncFunction
-
-function AsyncFunction:__call( ... )
-    return self:call( ... )
-end
-
 ---@class Thread
 ---@field name string The name of the thread.
 ---@field runner function? The function that will be called to run the thread.
@@ -30,13 +21,10 @@ local __active_runner
 --- Converts a function into an asynchronous function that can be called without blocking the main thread.
 ---@param func function The function to convert into an asynchronous function.
 ---@param trigger Trigger? An optional trigger function that can be used to control the execution of the asynchronous function.
----@return AsyncFunction wrapper The asynchronous version of the function.
+---@return function wrapper The asynchronous version of the function.
 ---@diagnostic disable-next-line: lowercase-global
 function async( func, trigger )
-    ---@type AsyncFunction
-    local asyncFunction = setmetatable( {}, AsyncFunction )
-
-    function asyncFunction:call( ... )
+    return function( ... )
         local coroutine = coroutine_create( func )
         local arguments = { ... }
 
@@ -99,8 +87,6 @@ function async( func, trigger )
 
         return thread
     end
-
-    return asyncFunction
 end
 
 --- Waits for a thread to complete and returns the values produced by the asynchronous function.
